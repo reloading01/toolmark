@@ -39,9 +39,14 @@ Three files land in `--out-dir`:
 |---|---|
 | `findings.jsonl` | One record per detection, severity-ordered, with the evidence attached |
 | `timeline.jsonl` | One record per tool call: parent, depth, subagent, outcome, permission mode, cwd, git branch |
+| `manifest.json` | Chain of custody: a SHA-256 of every artifact read and every report written, with the acquisition context |
 | `artifacts.jsonl` | File versions, background jobs and shell snapshots recovered from the other artifact planes |
 
 Useful flags: `--since-days N` to time-box a triage, `--project PATH` to pull in a repository's `.claude/settings.json`, `--limit N`, `--no-timeline`, `--no-redact`.
+
+Every run writes a chain-of-custody manifest alongside the reports, following what NIST SP 800-86 asks a collection to record: what was acquired, from which host, when, by whom, and with which procedure, plus a SHA-256 of each item so a later reader can prove nothing changed. The reports are hashed too, since a manifest covering only the inputs would let findings be edited afterwards without leaving a trace. Hashing the whole corpus costs a few seconds, so it is on by default; `--no-manifest` turns it off. The manifest cannot cover itself, and says so.
+
+Note that the manifest records the operator account and hostname on purpose. That is the point of a custody record, and it is also why the output directory is not something to commit.
 
 Secrets are masked by default. The report is itself a leak surface, because transcripts hold raw prompts, file contents and credentials, so turning masking off is explicit.
 

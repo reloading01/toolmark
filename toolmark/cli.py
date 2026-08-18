@@ -14,7 +14,9 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import __version__
 from .artifacts import build_digest_index, iter_file_history, iter_jobs, probe_candidates, resolve_versions
+from .custody import build_manifest, collect_evidence, now_iso
 from .detect import (
     Finding,
     collect_declared_hook_commands,
@@ -102,6 +104,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     subagent_transcripts = 0
     malformed = 0
     injection_stats: dict[str, int] = {}
+    started_at = now_iso()
+    evidence_paths: list[Path] = []
     hook_runs = 0
     withdrawn = 0
     compactions = 0
@@ -128,6 +132,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 edited_paths.add(target)
         cwds.update(event.cwd for event in session.events.values() if event.cwd)
         newest_activity = max(newest_activity, path.stat().st_mtime)
+        evidence_paths.append(path)
         for event in session.events.values():
             if event.mcp_server:
                 used_components["mcp_server"].add(event.mcp_server)
@@ -146,11 +151,30 @@ def cmd_scan(args: argparse.Namespace) -> int:
     # file-history entries are named by path digest with no manifest, so they
     # resolve only against paths seen in transcripts or paths we think to probe.
     home = claude_dir.parent
+    evidence_paths.extend(
+        p
+        for p in [
+            claude_dir / "history.jsonl",
+            claude_dir / "settings.json",
+            claude_dir / "settings.local.json",
+            claude_dir / "policy-limits.json",
+            claude_dir / "plugins" / "installed_plugins.json",
+            claude_dir / "plugins" / "known_marketplaces.json",
+            home / ".claude.json",
+        ]
+        if p.exists()
+    )
+    evidence_paths.extend((claude_dir / "plugins").rglob("hooks/hooks.json"))
+    evidence_paths.extend(p / ".mcp.json" for p in projects if (p / ".mcp.json").exists())
+
     file_versions = iter_file_history(claude_dir)
     resolve_versions(file_versions, build_digest_index(edited_paths | set(probe_candidates(home, cwds))))
     findings.extend(detect_config_tampering(file_versions))
+    evidence_paths.extend(Path(v.stored_path) for v in file_versions)
 
     jobs = iter_jobs(claude_dir)
+    evidence_paths.extend((claude_dir / "jobs").rglob("state.json"))
+    evidence_paths.extend((claude_dir / "jobs").rglob("timeline.jsonl"))
     findings.extend(detect_job_risks(jobs, redact_output))
 
     mcp_servers = collect_mcp_servers(claude_dir, projects)
@@ -163,6 +187,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     )
 
     snapshots = iter_snapshots(claude_dir)
+    evidence_paths.extend(Path(s.path) for s in snapshots)
     findings.extend(detect_shell_shadowing(snapshots, redact_output))
     findings.extend(detect_path_hijack(snapshots))
 
@@ -274,6 +299,24 @@ def cmd_scan(args: argparse.Namespace) -> int:
         ],
     )
     outputs.append(f"{artifacts_path} ({written} artifact records)")
+
+    if not args.no_manifest:
+        evidence = collect_evidence(evidence_paths, claude_dir)
+        produced = [Path(line.split(" (")[0]) for line in outputs]
+        manifest_path = out_dir / "manifest.json"
+        manifest = build_manifest(
+            tool_version=__version__,
+            source_root=claude_dir,
+            started_at=started_at,
+            evidence=evidence,
+            outputs=collect_evidence(produced, out_dir),
+            redacted=redact_output,
+        )
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+        outputs.append(
+            f"{manifest_path} ({len(evidence)} evidence files, "
+            f"{manifest['summary']['evidence_bytes'] / 1e6:.0f} MB hashed)"
+        )
 
     by_detector = Counter(f.detector for f in findings)
     by_severity = Counter(f.severity for f in findings)
@@ -403,6 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--since-days", type=int, help="only transcripts within N days of the newest one")
     scan.add_argument("--limit", type=int, help="stop after N transcripts")
     scan.add_argument("--no-timeline", action="store_true", help="skip timeline.jsonl")
+    scan.add_argument("--no-manifest", action="store_true", help="skip the chain-of-custody manifest")
     scan.add_argument("--no-history", action="store_true", help="skip history.jsonl")
     scan.add_argument("--no-redact", action="store_true", help="do not mask secrets in output")
     scan.set_defaults(func=cmd_scan)
