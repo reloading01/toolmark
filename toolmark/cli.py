@@ -34,6 +34,7 @@ from .detect import (
 )
 from .inventory import collect_mcp_servers, collect_plugins, collect_project_trust
 from .history import measure_coverage, observed_retention, parse_history
+from .preserve import plan_paths, preserve
 from .parse import CORE_FIELDS, KNOWN_FIELDS, SIGNAL_FIELDS, iter_session_files, parse_session
 from .redact import redact_value, truncate
 from .timesketch import write_csv
@@ -480,6 +481,68 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preserve(args: argparse.Namespace) -> int:
+    claude_dir = Path(args.claude_dir).expanduser()
+    if not claude_dir.exists():
+        print(f"error: {claude_dir} does not exist", file=sys.stderr)
+        return 2
+    archive = Path(args.archive).expanduser()
+    codex_dir = Path(args.codex_dir).expanduser() if args.codex_dir else None
+
+    started = now_iso()
+    pairs = plan_paths(claude_dir, codex_dir)
+    result, records = preserve(pairs, archive)
+
+    archive.mkdir(parents=True, exist_ok=True)
+    with (archive / "index.jsonl").open("a", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    with (archive / "runs.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "run_id": result.run_id,
+                    "started_at": started,
+                    "completed_at": now_iso(),
+                    "tool_version": __version__,
+                    "source_root": str(claude_dir),
+                    "codex_root": str(codex_dir) if codex_dir else "",
+                    "planned": len(pairs),
+                    "added": result.added,
+                    "changed": result.changed,
+                    "unchanged": result.unchanged,
+                    "bytes_added": result.bytes_added,
+                    "vanished": result.vanished,
+                    "errors": result.errors,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    print(f"archive         : {archive}", file=sys.stderr)
+    print(
+        f"preserved       : {result.preserved} files "
+        f"({result.added} new, {result.changed} changed, {result.unchanged} already held)",
+        file=sys.stderr,
+    )
+    print(f"stored          : {result.bytes_added / 1e6:.1f} MB of new content", file=sys.stderr)
+    if result.vanished:
+        print(
+            f"gone from host  : {len(result.vanished)} file(s) the source no longer has; "
+            f"the copy here is the only one left",
+            file=sys.stderr,
+        )
+        for path in result.vanished[:5]:
+            print(f"  {path}", file=sys.stderr)
+        if len(result.vanished) > 5:
+            print(f"  ... and {len(result.vanished) - 5} more, listed in runs.jsonl", file=sys.stderr)
+    for error in result.errors[:5]:
+        print(f"error           : {error}", file=sys.stderr)
+    print(f"scan it with    : toolmark scan --claude-dir {archive}/latest/claude", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="toolmark", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -496,6 +559,12 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-history", action="store_true", help="skip history.jsonl")
     scan.add_argument("--no-redact", action="store_true", help="do not mask secrets in output")
     scan.set_defaults(func=cmd_scan)
+
+    keep = sub.add_parser("preserve", help="copy artifacts into an archive before retention removes them")
+    keep.add_argument("--claude-dir", default="~/.claude", help="agent home directory (default: ~/.claude)")
+    keep.add_argument("--codex-dir", help="also preserve a Codex CLI directory")
+    keep.add_argument("--archive", required=True, help="archive directory to write into")
+    keep.set_defaults(func=cmd_preserve)
     return parser
 
 

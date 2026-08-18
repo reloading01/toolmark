@@ -99,7 +99,8 @@ class WriteCsvTest(unittest.TestCase):
         )
         self.assertEqual((written, dropped), (2, 1))
 
-        rows = list(csv.DictReader(self.path.open(encoding="utf-8")))
+        with self.path.open(encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
         self.assertEqual(len(rows), 2)
         for row in rows:
             for column in MANDATORY:
@@ -107,7 +108,8 @@ class WriteCsvTest(unittest.TestCase):
 
     def test_header_matches_the_declared_columns(self):
         write_csv(self.path, [], [])
-        header = next(csv.reader(self.path.open(encoding="utf-8")))
+        with self.path.open(encoding="utf-8") as fh:
+            header = next(csv.reader(fh))
         self.assertEqual(header, COLUMNS)
         for column in MANDATORY:
             self.assertIn(column, header)

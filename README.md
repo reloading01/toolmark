@@ -16,6 +16,22 @@ python3 -m toolmark.cli scan --claude-dir ~/.claude --out-dir ./out
 
 Python 3.10 or newer. No dependencies, no network calls, no telemetry. Everything is read-only.
 
+## Preserve first
+
+Detection quality counts for nothing against evidence that is already gone, and the windows are short. On the host this was built against, shell snapshots lasted under a day and transcripts about a month. By the time anyone notices an agent did something odd, the record of how it did it may have been swept.
+
+```bash
+toolmark preserve --claude-dir ~/.claude --codex-dir ~/.codex --archive ~/toolmark-archive
+```
+
+Blobs are content addressed under `objects/`, and `latest/` mirrors the source layout with hard links into them, so the archive costs one copy of each distinct file and can be read straight back:
+
+```bash
+toolmark scan --claude-dir ~/toolmark-archive/latest/claude
+```
+
+Nothing is removed from the mirror, which makes it the union of everything seen across runs rather than a snapshot of the current state. When a file disappears from the source the run says so, and the preserved copy is then the only one left. Runs are incremental: a second pass over 2,762 files took 1.3 seconds and stored nothing new. Cheap enough for a daily cron, which is the point.
+
 ## Run
 
 ```
