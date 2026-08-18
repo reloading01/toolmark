@@ -138,9 +138,26 @@ TOOL_ACTION_FIELDS: dict[str, tuple[str, ...]] = {
     "WebSearch": (),
     "SendMessage": (),
     "TodoWrite": (),
+    # Codex CLI tool names. exec_command and shell_command spell the command
+    # differently in the transcript; the parser normalises both to "command".
+    "exec_command": ("command",),
+    "shell_command": ("command",),
+    "exec": ("command", "input"),
+    "apply_patch": ("input",),
+    "write_stdin": ("chars",),
+    "update_plan": (),
 }
 
-UNATTENDED_MODES = {"bypassPermissions", "dangerouslySkipPermissions"}
+UNATTENDED_MODES = {
+    "bypassPermissions",
+    "dangerouslySkipPermissions",
+    # Codex spells it as an approval policy paired with a sandbox: an
+    # approval policy of "never" means no human in the loop either way.
+    "never/danger-full-access",
+    "never/workspace-write",
+    "never/read-only",
+    "never/unknown",
+}
 
 # CLI flags that hand a background job unattended execution.
 DANGEROUS_LAUNCH_FLAGS = {
@@ -890,6 +907,12 @@ def detect_injection_chain(
     Both halves are required. Proximity alone is meaningless - "read a file,
     then run a command" is what the tool does all day - and markers alone fire
     on any repository that discusses prompt injection, this one included."""
+    if session.causality != "recorded":
+        # Without parent links there is no descent to follow, and adjacency is
+        # not causation. Reporting on it would be exactly the mistake this
+        # detector was built to avoid.
+        return []
+
     findings: list[Finding] = []
     for call, result in session.iter_tool_calls():
         if result is None:

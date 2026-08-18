@@ -119,6 +119,45 @@ Retention itself is measured rather than assumed. The documented behaviour has c
 
 ## Which agents
 
+Claude Code in full, and Codex CLI for everything its transcripts support.
+
+```bash
+python3 -m toolmark.cli scan --claude-dir ~/.claude --codex-dir ~/.codex --out-dir ./out
+```
+
+The split that matters is between parsers and detectors. Detectors reason about commands, paths, configuration and permissions, so they port. The parser is the agent-specific half, and adding an agent means writing one.
+
+Codex keeps a session per JSONL under `~/.codex/sessions/<yyyy>/<mm>/<dd>/` and `archived_sessions/`, in a flat `{timestamp, type, payload}` envelope. Measured rather than assumed, this is what carries over:
+
+| Question | Codex |
+|---|---|
+| What ran, and did it succeed | Yes. Calls pair with output through `call_id`, and `exec_command_end` supplies the command and its exit code |
+| Was it running unattended | Yes. `turn_context` carries `approval_policy` and `sandbox_policy`; an approval policy of `never` is no human in the loop |
+| Which component acted | Yes, for MCP. `mcp_tool_call_end` names the server and the tool |
+| What caused what | No. Records carry no parent link, and `turn_id` is absent from tool calls |
+
+So the timeline and the detectors that reason about a single action port; the causal ones do not. Sessions are marked `causality="ordered"`, and `injection_chain` declines to run on them rather than treating adjacency as causation, which is the mistake it exists to avoid. The run says how many sessions were skipped for that reason.
+
+Codex also carries its own version of nearly every plane below: `shell_snapshots/`, `history.jsonl`, `skills/`, `plugins/`, `rules/`, `memories/`, SQLite state stores, and an `auth.json` holding live credentials. Those are not parsed yet.
+
+## Supply chain
+
+An agent's reach is whatever its components can do, and those components are third-party code. The first confirmed malicious MCP server in the wild shipped fifteen clean releases before adding a line that copied every email to its author, so what is installed and what ran are separate questions.
+
+Servers are declared in four places and a single config read is not an inventory: user scope and local scope both live in `~/.claude.json`, project scope lives in a `.mcp.json` committed to the repository, and plugins declare their own. Project-scoped servers only load once the workspace is trusted, so the trust decision recorded per project is part of the picture rather than a footnote. Attribution runs the other direction: transcripts record which MCP server, tool, plugin and skill produced each action, so a finding can name the component rather than only the session.
+
+One comparison is deliberately not a finding. A server used in a transcript with no matching declaration looks like the obvious detection, but measurement shows the host injects servers at runtime that appear in no configuration file at all, so the check flags ordinary desktop use. It is reported as reconciliation instead, with the count stated plainly.
+
+## Evidence coverage
+
+Transcripts are swept by `cleanupPeriodDays`, default 30. `history.jsonl` is not, and routinely reaches back an order of magnitude further, which is why a run reports how much of the prompt history still has a transcript behind it. That number is the honest way to state how much of a timeline is missing before anyone reads a finding.
+
+The index is not complete, though, and the gap is not random. Measured across a real machine, every session started at the terminal appears in it and effectively none of the desktop sessions do. So for terminal work the record of what the agent was told outlives the record of what it did; for desktop work, when the transcript goes, the prompts go with it. The coverage report breaks the ratio down by entrypoint rather than averaging the two into a number that describes neither.
+
+Retention itself is measured rather than assumed. The documented behaviour has contradicted the changelog across releases, and the spans observed on disk differ per plane by more than an order of magnitude, so a run prints the window it actually found for each one.
+
+## Which agents
+
 Claude Code today, in full: the causal tree plus all four artifact planes.
 
 The split that matters is between parsers and detectors. Detectors reason about commands, paths, configuration and permissions, so they port to any agent. The parser is the agent-specific half, and adding an agent means writing one.

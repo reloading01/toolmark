@@ -152,6 +152,10 @@ class Session:
     neutralized_by_fork: int = 0
     refusals: list[ModelRefusal] = field(default_factory=list)
     malformed_lines: int = 0
+    # "recorded" when the transcript links each record to its parent,
+    # "ordered" when only sequence is available. Detectors that reason
+    # about descent must not run on the second.
+    causality: str = "recorded"
 
     def result_for(self, call_id: str) -> ToolResult | None:
         return self.results.get(call_id)

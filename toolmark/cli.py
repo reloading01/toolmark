@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from .codex import iter_codex_sessions, parse_codex_session
 from .artifacts import build_digest_index, iter_file_history, iter_jobs, probe_candidates, resolve_versions
 from .custody import build_manifest, collect_evidence, now_iso
 from .detect import (
@@ -177,6 +178,22 @@ def cmd_scan(args: argparse.Namespace) -> int:
     evidence_paths.extend((claude_dir / "jobs").rglob("state.json"))
     evidence_paths.extend((claude_dir / "jobs").rglob("timeline.jsonl"))
     findings.extend(detect_job_risks(jobs, redact_output))
+
+    codex_sessions = 0
+    codex_calls = 0
+    if args.codex_dir:
+        codex_dir = Path(args.codex_dir).expanduser()
+        for path in iter_codex_sessions(codex_dir):
+            if args.limit and codex_sessions >= args.limit:
+                break
+            session = parse_codex_session(path)
+            codex_sessions += 1
+            codex_calls += len(session.calls)
+            malformed += session.malformed_lines
+            evidence_paths.append(path)
+            findings.extend(run_session_detectors(session, redact_output, injection_stats, declared_hooks))
+            if not args.no_timeline:
+                timeline.extend(_timeline_rows(session, redact_output))
 
     mcp_servers = collect_mcp_servers(claude_dir, projects)
     installed_plugins = collect_plugins(claude_dir)
@@ -390,6 +407,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
             f"{compactions} compaction boundary/ies",
             file=sys.stderr,
         )
+    if codex_sessions:
+        print(
+            f"codex sessions  : {codex_sessions} ({codex_calls} tool calls); ordered only, so "
+            f"injection chains are not evaluated for them",
+            file=sys.stderr,
+        )
     print(f"background jobs : {len(jobs)}", file=sys.stderr)
     print(
         f"shell snapshots : {len(snapshots)} "
@@ -456,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--since-days", type=int, help="only transcripts within N days of the newest one")
     scan.add_argument("--limit", type=int, help="stop after N transcripts")
     scan.add_argument("--no-timeline", action="store_true", help="skip timeline.jsonl")
+    scan.add_argument("--codex-dir", help="also scan a Codex CLI directory, for example ~/.codex")
     scan.add_argument("--no-manifest", action="store_true", help="skip the chain-of-custody manifest")
     scan.add_argument("--no-history", action="store_true", help="skip history.jsonl")
     scan.add_argument("--no-redact", action="store_true", help="do not mask secrets in output")
