@@ -1,0 +1,9 @@
+# Triage output contains raw prompts, file paths and credential material.
+toolmark-out/
+*.findings.jsonl
+*.timeline.jsonl
+
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
