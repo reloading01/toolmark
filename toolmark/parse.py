@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Iterator
 
-from .model import Event, HookRun, Session, ToolCall, ToolResult
+from .model import Event, HookRun, ModelRefusal, Session, ToolCall, ToolDenial, ToolResult
 
 # Without these the transcript cannot be placed in a graph at all.
 CORE_FIELDS = frozenset({"uuid", "type", "timestamp", "message"})
@@ -129,6 +129,37 @@ def parse_session(path: str | os.PathLike[str]) -> Session:
                         level=str(raw.get("level") or ""),
                         tool_use_id=str(raw.get("toolUseID") or ""),
                         cwd=raw.get("cwd", ""),
+                    )
+                )
+
+            if raw.get("toolDenialKind"):
+                envelope = raw.get("toolUseResult")
+                session.denials.append(
+                    ToolDenial(
+                        event_uuid=uuid,
+                        timestamp=raw.get("timestamp", ""),
+                        kind=str(raw["toolDenialKind"]),
+                        source_event_uuid=str(raw.get("sourceToolAssistantUUID") or ""),
+                        result=envelope if isinstance(envelope, str) else "",
+                        cwd=raw.get("cwd", ""),
+                    )
+                )
+
+            if raw.get("apiRefusalCategory"):
+                session.refusals.append(
+                    ModelRefusal(
+                        event_uuid=uuid,
+                        timestamp=raw.get("timestamp", ""),
+                        category=str(raw["apiRefusalCategory"]),
+                        subtype=str(raw.get("subtype") or ""),
+                        explanation=str(raw.get("apiRefusalExplanation") or ""),
+                        original_model=str(raw.get("originalModel") or ""),
+                        fallback_model=str(raw.get("fallbackModel") or ""),
+                        refused_message_uuid=str(raw.get("refusedUserMessageUuid") or ""),
+                        retracted_uuids=[
+                            str(x) for x in (raw.get("retractedMessageUuids") or []) if isinstance(x, str)
+                        ],
+                        content=str(raw.get("content") or ""),
                     )
                 )
 

@@ -28,7 +28,7 @@ from pathlib import Path
 from .history import PromptRecord
 from .inventory import InstalledPlugin, McpServer, ProjectTrust, format_timestamp, parse_timestamp
 from .artifacts import SELF_CONFIG_FRAGMENTS, SELF_CONFIG_SUFFIXES, FileVersion, Job
-from .model import HookRun, Session
+from .model import HookRun, ModelRefusal, Session, ToolDenial
 from .shellsnap import Snapshot, is_tool_shadow
 from .redact import redact_value, truncate
 
@@ -1171,6 +1171,116 @@ def detect_supply_chain(
     return findings
 
 
+# The classifier pauses auto mode after this many blocks, so reaching it is a
+# documented threshold rather than an arbitrary one.
+AUTOMODE_BLOCK_THRESHOLD = 3
+
+_CLASSIFIER_KINDS = {"automode-blocked", "automode-parsing-error"}
+
+
+def _denied_call(session: Session, denial: ToolDenial):
+    source = session.events.get(denial.source_event_uuid)
+    return source.tool_calls[0] if source and source.tool_calls else None
+
+
+def detect_blocked_actions(session: Session, redact_output: bool = True) -> list[Finding]:
+    """What the agent tried and did not get to do.
+
+    A blocked attempt is often the clearest statement of intent in an
+    intrusion, and it is invisible to anything that only reads what succeeded.
+    Two sources: a tool call stopped by the user or the auto-mode classifier,
+    and a request the model's own safeguards declined."""
+    findings: list[Finding] = []
+
+    classifier_blocks = sum(1 for d in session.denials if d.kind in _CLASSIFIER_KINDS)
+    for denial in session.denials:
+        call = _denied_call(session, denial)
+        values = _action_values(call.name, call.input) if call else []
+        critical, contextual, egress, remote_exec = _assess_targets(values)
+        # Egress alone is not enough, the same call credential_access makes:
+        # fetching a URL is ordinary work until credential material is in it.
+        sensitive = bool(critical) or (bool(contextual) and egress and not remote_exec)
+
+        if sensitive:
+            severity = "high"
+        elif denial.kind in _CLASSIFIER_KINDS:
+            severity = "high" if classifier_blocks >= AUTOMODE_BLOCK_THRESHOLD else "medium"
+        else:
+            severity = "low"
+
+        findings.append(
+            Finding(
+                detector="blocked_action",
+                severity=severity,
+                title=f"Tool call blocked ({denial.kind})",
+                detail=(
+                    f"{call.name if call else 'a tool call'} was stopped"
+                    + (f"; its target matched {sorted(set(critical + contextual))}" if (critical or contextual) else "")
+                    + (
+                        f"; {classifier_blocks} classifier blocks in this session"
+                        if denial.kind in _CLASSIFIER_KINDS
+                        else ""
+                    )
+                ),
+                source=session.path,
+                session_id=session.session_id,
+                timestamp=denial.timestamp,
+                evidence={
+                    "kind": denial.kind,
+                    "tool": call.name if call else "",
+                    "input": redact_value(call.input, redact_output) if call else {},
+                    "critical_markers": sorted(set(critical)),
+                    "egress": egress,
+                    "result": truncate(redact_value(denial.result, redact_output), 200),
+                    "cwd": denial.cwd,
+                    "event_uuid": denial.event_uuid,
+                },
+            )
+        )
+
+    # One finding per refusal buries a session that trips safeguards often
+    # under a hundred near-identical rows, so they are grouped by category.
+    by_category: dict[str, list[ModelRefusal]] = defaultdict(list)
+    for refusal in session.refusals:
+        by_category[refusal.category].append(refusal)
+
+    for category, refusals in by_category.items():
+        retried = [r for r in refusals if r.fallback_model]
+        routes = sorted({f"{r.original_model} -> {r.fallback_model}" for r in retried})
+        retracted = sum(len(r.retracted_uuids) for r in refusals)
+        findings.append(
+            Finding(
+                detector="blocked_action",
+                # A refusal retried elsewhere means the work continued after
+                # safeguards declined it, which is the part worth reading.
+                severity="high" if retried else "medium",
+                title=f"Model refused {len(refusals)} request(s) ({category})",
+                detail=(
+                    f"Safeguards declined {len(refusals)} request(s) in this session; "
+                    + (
+                        f"{len(retried)} were retried on a fallback model ({', '.join(routes)})"
+                        if retried
+                        else "none were retried"
+                    )
+                    + (f"; {retracted} message(s) retracted" if retracted else "")
+                ),
+                source=session.path,
+                session_id=session.session_id,
+                timestamp=refusals[0].timestamp,
+                evidence={
+                    "category": category,
+                    "refusals": len(refusals),
+                    "retried_on_fallback": len(retried),
+                    "fallback_routes": routes,
+                    "retracted_messages": retracted,
+                    "notice": truncate(redact_value(refusals[0].content, redact_output), 300),
+                    "event_uuids": [r.event_uuid for r in refusals[:10]],
+                },
+            )
+        )
+    return findings
+
+
 def run_session_detectors(
     session: Session,
     redact_output: bool = True,
@@ -1182,4 +1292,5 @@ def run_session_detectors(
         + detect_credential_access(session, redact_output)
         + detect_injection_chain(session, redact_output, stats=stats)
         + detect_hook_execution(session, declared_hook_commands, redact_output)
+        + detect_blocked_actions(session, redact_output)
     )

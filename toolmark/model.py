@@ -56,6 +56,36 @@ class HookRun:
 
 
 @dataclass
+class ToolDenial:
+    """A tool call that was requested and stopped, by the user or by the
+    auto-mode classifier. The attempt is evidence whether or not it ran."""
+
+    event_uuid: str
+    timestamp: str
+    kind: str
+    source_event_uuid: str = ""
+    result: str = ""
+    cwd: str = ""
+
+
+@dataclass
+class ModelRefusal:
+    """Safeguards declined a request. When a fallback model is named, the work
+    was retried somewhere else rather than abandoned."""
+
+    event_uuid: str
+    timestamp: str
+    category: str
+    subtype: str = ""
+    explanation: str = ""
+    original_model: str = ""
+    fallback_model: str = ""
+    refused_message_uuid: str = ""
+    retracted_uuids: list[str] = field(default_factory=list)
+    content: str = ""
+
+
+@dataclass
 class Event:
     """One JSONL line, normalised. `parent_uuid` is what makes the transcript a graph."""
 
@@ -99,6 +129,8 @@ class Session:
     versions: set[str] = field(default_factory=set)
     seen_fields: set[str] = field(default_factory=set)
     hook_runs: list[HookRun] = field(default_factory=list)
+    denials: list[ToolDenial] = field(default_factory=list)
+    refusals: list[ModelRefusal] = field(default_factory=list)
     malformed_lines: int = 0
 
     def result_for(self, call_id: str) -> ToolResult | None:
