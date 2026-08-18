@@ -33,6 +33,7 @@ from .inventory import collect_mcp_servers, collect_plugins, collect_project_tru
 from .history import measure_coverage, observed_retention, parse_history
 from .parse import CORE_FIELDS, KNOWN_FIELDS, SIGNAL_FIELDS, iter_session_files, parse_session
 from .redact import redact_value, truncate
+from .timesketch import write_csv
 from .shellsnap import iter_snapshots
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -299,6 +300,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
         ],
     )
     outputs.append(f"{artifacts_path} ({written} artifact records)")
+
+    if not args.no_timeline:
+        csv_path = out_dir / "timeline.csv"
+        written, dropped = write_csv(csv_path, timeline, [f.to_dict() for f in findings])
+        outputs.append(
+            f"{csv_path} ({written} Timesketch rows"
+            + (f", {dropped} dropped for want of a timestamp" if dropped else "")
+            + ")"
+        )
 
     if not args.no_manifest:
         evidence = collect_evidence(evidence_paths, claude_dir)

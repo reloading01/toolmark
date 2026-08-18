@@ -39,10 +39,13 @@ Three files land in `--out-dir`:
 |---|---|
 | `findings.jsonl` | One record per detection, severity-ordered, with the evidence attached |
 | `timeline.jsonl` | One record per tool call: parent, depth, subagent, outcome, permission mode, cwd, git branch |
+| `timeline.csv` | The same timeline in Timesketch's import format, with findings interleaved as events |
 | `manifest.json` | Chain of custody: a SHA-256 of every artifact read and every report written, with the acquisition context |
 | `artifacts.jsonl` | File versions, background jobs and shell snapshots recovered from the other artifact planes |
 
 Useful flags: `--since-days N` to time-box a triage, `--project PATH` to pull in a repository's `.claude/settings.json`, `--limit N`, `--no-timeline`, `--no-redact`.
+
+`timeline.csv` is the same data in the shape Timesketch imports: `message`, `datetime` with an offset, `timestamp_desc`, and the agent-specific fields riding along as extra columns. Findings are written as events too, so a single sketch holds what happened and what was flagged on one axis. Rows with no usable timestamp cannot be placed and are dropped, and the count comes back with the run rather than disappearing quietly.
 
 Every run writes a chain-of-custody manifest alongside the reports, following what NIST SP 800-86 asks a collection to record: what was acquired, from which host, when, by whom, and with which procedure, plus a SHA-256 of each item so a later reader can prove nothing changed. The reports are hashed too, since a manifest covering only the inputs would let findings be edited afterwards without leaving a trace. Hashing the whole corpus costs a few seconds, so it is on by default; `--no-manifest` turns it off. The manifest cannot cover itself, and says so.
 
