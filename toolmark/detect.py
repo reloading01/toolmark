@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .history import PromptRecord
+from .pastecache import PasteEntry
 from .inventory import InstalledPlugin, McpServer, ProjectTrust, format_timestamp, parse_timestamp
 from .artifacts import SELF_CONFIG_FRAGMENTS, SELF_CONFIG_SUFFIXES, FileVersion, Job
 from .model import HookRun, ModelRefusal, Session, ToolDenial
@@ -1364,6 +1365,56 @@ def detect_withdrawn_content(session: Session, redact_output: bool = True) -> li
                 },
             )
         )
+    return findings
+
+
+def detect_cached_pastes(entries: list[PasteEntry], redact_output: bool = True) -> list[Finding]:
+    """Injection arrives by paste as readily as by file read, and the cache
+    covers sessions the prompt index never records."""
+    findings: list[Finding] = []
+    for entry in entries:
+        if not entry.integrity_ok:
+            findings.append(
+                Finding(
+                    detector="cached_paste",
+                    severity="high",
+                    title="Cached paste no longer matches its own digest",
+                    detail=(
+                        f"The file is named for {entry.name_digest} but hashes to "
+                        f"{entry.content_digest}, so it changed after it was cached"
+                    ),
+                    source=entry.path,
+                    timestamp=entry.modified,
+                    evidence={
+                        "name_digest": entry.name_digest,
+                        "content_digest": entry.content_digest,
+                        "size": entry.size,
+                    },
+                )
+            )
+
+        markers = _injection_markers(entry.content)
+        if markers:
+            findings.append(
+                Finding(
+                    detector="cached_paste",
+                    severity="medium",
+                    title="Instruction-like content in a cached paste",
+                    detail=(
+                        f"Matched {markers}; pasted content is cached separately from the "
+                        f"transcript and from the prompt index"
+                    ),
+                    source=entry.path,
+                    timestamp=entry.modified,
+                    evidence={
+                        "markers": markers,
+                        "zero_width_present": bool(_ZERO_WIDTH.search(entry.content)),
+                        "digest": entry.content_digest,
+                        "size": entry.size,
+                        "excerpt": truncate(redact_value(entry.content.strip(), redact_output), 500),
+                    },
+                )
+            )
     return findings
 
 

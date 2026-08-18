@@ -61,6 +61,7 @@ Secrets are masked by default. The report is itself a leak surface, because tran
 | `withdrawn_content` | Messages the transcript says were retracted or superseded, and context lost to compaction |
 | `blocked_action` | Tool calls the user or the auto-mode classifier stopped, and requests the model's own safeguards declined |
 | `supply_chain` | Plugins from unregistered marketplaces, components introduced just before the activity collected, and MCP servers the repository defines for itself |
+| `cached_paste` | Instruction-like content in a cached paste, and entries that no longer match their own digest |
 | `pasted_injection` | Instruction-like content entering through a prompt or a paste, which outlives the transcript that would show what came of it |
 | `hook_execution` | Hooks that actually ran: ones that errored, blocked the agent, injected context, or fired from a declaration that no longer exists |
 | `injection_chain` | Instruction-like content the agent read, followed by a sensitive action descending from it |
@@ -94,6 +95,7 @@ Declared and executed are different questions, and the transcript answers the se
 | `shell-snapshots/snapshot-<shell>-<epoch_ms>-<id>.sh` | The shell as the agent saw it: functions, aliases, options, exported PATH |
 | `~/.claude.json` | User and local scoped MCP servers, per-project trust decisions, server enable/disable state, and a tool usage ledger |
 | `<project>/.mcp.json` | Project-scoped MCP servers, committed to the repository |
+| `paste-cache/` | Text pasted into a session, stored as `<sha256(content)[:16]>.txt`, so each entry checks its own integrity |
 | `history.jsonl` | Every prompt typed at the terminal, with timestamp, project and pasted content inline |
 | `settings.json`, `plugins/`, `known_marketplaces.json` | Configuration, installed plugins, registered marketplaces |
 
@@ -112,6 +114,8 @@ One comparison is deliberately not a finding. A server used in a transcript with
 ## Evidence coverage
 
 Transcripts are swept by `cleanupPeriodDays`, default 30. `history.jsonl` is not, and routinely reaches back an order of magnitude further, which is why a run reports how much of the prompt history still has a transcript behind it. That number is the honest way to state how much of a timeline is missing before anyone reads a finding.
+
+Pasted text lands in `paste-cache/` under a name that is a digest of the content, so an entry can be integrity-checked with nothing else to hand and a mismatch means the file changed after it was written. That plane covers a surface the prompt index does not: none of the cached pastes measured had a counterpart in `history.jsonl`, because they came from sessions the index never recorded.
 
 The index is not complete, though, and the gap is not random. Measured across a real machine, every session started at the terminal appears in it and effectively none of the desktop sessions do. So for terminal work the record of what the agent was told outlives the record of what it did; for desktop work, when the transcript goes, the prompts go with it. The coverage report breaks the ratio down by entrypoint rather than averaging the two into a number that describes neither.
 
@@ -151,6 +155,8 @@ One comparison is deliberately not a finding. A server used in a transcript with
 ## Evidence coverage
 
 Transcripts are swept by `cleanupPeriodDays`, default 30. `history.jsonl` is not, and routinely reaches back an order of magnitude further, which is why a run reports how much of the prompt history still has a transcript behind it. That number is the honest way to state how much of a timeline is missing before anyone reads a finding.
+
+Pasted text lands in `paste-cache/` under a name that is a digest of the content, so an entry can be integrity-checked with nothing else to hand and a mismatch means the file changed after it was written. That plane covers a surface the prompt index does not: none of the cached pastes measured had a counterpart in `history.jsonl`, because they came from sessions the index never recorded.
 
 The index is not complete, though, and the gap is not random. Measured across a real machine, every session started at the terminal appears in it and effectively none of the desktop sessions do. So for terminal work the record of what the agent was told outlives the record of what it did; for desktop work, when the transcript goes, the prompts go with it. The coverage report breaks the ratio down by entrypoint rather than averaging the two into a number that describes neither.
 

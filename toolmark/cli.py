@@ -15,12 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from .pastecache import iter_paste_cache
 from .codex import iter_codex_sessions, parse_codex_session
 from .artifacts import build_digest_index, iter_file_history, iter_jobs, probe_candidates, resolve_versions
 from .custody import build_manifest, collect_evidence, now_iso
 from .detect import (
     Finding,
     collect_declared_hook_commands,
+    detect_cached_pastes,
     detect_config_tampering,
     detect_hooks,
     detect_job_risks,
@@ -203,6 +205,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
             mcp_servers, installed_plugins, project_trust, newest_activity, redact_output=redact_output
         )
     )
+
+    pastes = iter_paste_cache(claude_dir)
+    findings.extend(detect_cached_pastes(pastes, redact_output))
+    evidence_paths.extend(Path(p.path) for p in pastes)
 
     snapshots = iter_snapshots(claude_dir)
     evidence_paths.extend(Path(s.path) for s in snapshots)
@@ -411,6 +417,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(
             f"codex sessions  : {codex_sessions} ({codex_calls} tool calls); ordered only, so "
             f"injection chains are not evaluated for them",
+            file=sys.stderr,
+        )
+    if pastes:
+        intact = sum(1 for p in pastes if p.integrity_ok)
+        print(
+            f"cached pastes   : {len(pastes)} ({intact} matching their own digest)",
             file=sys.stderr,
         )
     print(f"background jobs : {len(jobs)}", file=sys.stderr)
