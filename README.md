@@ -24,6 +24,9 @@ sessions parsed : <n>
 tool calls      : <n>
 file versions   : <n> (<n> resolved to a path, <n> anonymous)
 ingress scanned : <n> results (<n> carried instruction-like markers)
+hook executions : <n> recorded (<n> hook commands declared in config)
+prompt history  : <n> prompts across <n> projects, <n> with a surviving transcript
+  evidence gap  : <n> prompts whose transcript is gone (<n>% of linkable)
 background jobs : <n>
 shell snapshots : <n>
 findings        : {'high': <n>, 'medium': <n>, 'low': <n>}
@@ -47,6 +50,7 @@ Secrets are masked by default. The report is itself a leak surface, because tran
 | Detector | Fires on |
 |---|---|
 | `hook_persistence` | Hooks that run code on their own schedule, across all five handler types and every file a hook can be declared in |
+| `pasted_injection` | Instruction-like content entering through a prompt or a paste, which outlives the transcript that would show what came of it |
 | `hook_execution` | Hooks that actually ran: ones that errored, blocked the agent, injected context, or fired from a declaration that no longer exists |
 | `injection_chain` | Instruction-like content the agent read, followed by a sensitive action descending from it |
 | `credential_access` | Tool calls targeting credential material, reported with the outcome so an attempt is not filed as a success |
@@ -73,11 +77,20 @@ Declared and executed are different questions, and the transcript answers the se
 | `file-history/<session>/<digest>@v<N>` | The agent's own copy of every file it edited, versioned |
 | `jobs/<id>/state.json`, `timeline.jsonl` | Background job launch flags, fanned-out shell tasks, and the job's state transitions |
 | `shell-snapshots/snapshot-<shell>-<epoch_ms>-<id>.sh` | The shell as the agent saw it: functions, aliases, options, exported PATH |
+| `history.jsonl` | Every prompt typed at the terminal, with timestamp, project and pasted content inline |
 | `settings.json`, `plugins/`, `known_marketplaces.json` | Configuration, installed plugins, registered marketplaces |
 
 `parentUuid` is the point of the whole thing. A transcript is not a flat log. Every record names its parent, which is what makes "which file read led to which command" an answerable question instead of a guess. `isSidechain` and `subagent_type` separate subagent branches from the main thread.
 
 `file-history` entries are named `<sha256(absolute path)[:16]>@v<N>` with no manifest, so the directory is anonymous by itself. The path comes either from edit targets in the transcripts, or from hashing a path you already suspect and looking for it. The second route still works after the 30-day transcript cleanup, which is exactly when it matters. Content is hard-linked across session directories, so an entry filed under a session whose transcript is gone still resolves if the same file was edited in a surviving session.
+
+## Evidence coverage
+
+Transcripts are swept by `cleanupPeriodDays`, default 30. `history.jsonl` is not, and routinely reaches back an order of magnitude further, which is why a run reports how much of the prompt history still has a transcript behind it. That number is the honest way to state how much of a timeline is missing before anyone reads a finding.
+
+The index is not complete, though, and the gap is not random. Measured across a real machine, every session started at the terminal appears in it and effectively none of the desktop sessions do. So for terminal work the record of what the agent was told outlives the record of what it did; for desktop work, when the transcript goes, the prompts go with it. The coverage report breaks the ratio down by entrypoint rather than averaging the two into a number that describes neither.
+
+Retention itself is measured rather than assumed. The documented behaviour has contradicted the changelog across releases, and the spans observed on disk differ per plane by more than an order of magnitude, so a run prints the window it actually found for each one.
 
 ## Which agents
 
@@ -105,7 +118,8 @@ Findings are noise-tuned against real usage, which is not the same as a detectio
 ## Limits
 
 - Nothing is pinned to an agent version. The schema drifts between releases, and a field can disappear inside one release as easily as across two, so the CLI measures the schema rather than comparing version strings. It reports the version range it saw, warns when a field the parser depends on is missing from the data, and flags top-level fields present in the transcripts that this build does not read yet. In practice that last check surfaces real gaps: hook execution records, attribution for MCP servers, tools, plugins and skills, and the ids of retracted or superseded messages.
-- Session transcripts are deleted after 30 days by default via `cleanupPeriodDays`, while `history.jsonl` keeps prompts far longer. The record of what the agent was told outlives the record of what it did, often by months, so collect before you triage.
+- Retention differs per artifact plane and the documentation has not kept up with the changelog, so nothing here hardcodes a window. Every run prints the span it measured on disk. Collect before you triage regardless: some planes are swept within a day.
+- `history.jsonl` records prompts entered at the terminal. Desktop sessions were absent from it in every case measured, so it cannot be treated as a complete prompt index.
 - Hook execution records only cover stop time. Other hook events leave no equivalent summary in the transcript, so a `PreToolUse` handler that ran is not visible this way. In-process handlers also report themselves as `callback` with no identifying command, so they can be counted but never matched against a declaration.
 - Shell function bodies are extracted by treating a `}` in column zero as the terminator. That holds for these generated snapshots and would not hold for hand-written shell.
 - A `file-history` entry proves a write happened and preserves the content, but carries no timestamp beyond the filesystem mtime and no link to the tool call that made it. Correlation is by session id and path.

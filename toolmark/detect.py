@@ -25,6 +25,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .history import PromptRecord
 from .artifacts import SELF_CONFIG_FRAGMENTS, SELF_CONFIG_SUFFIXES, FileVersion, Job
 from .model import HookRun, Session
 from .shellsnap import Snapshot, is_tool_shadow
@@ -170,10 +171,17 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         ),
     ),
     ("tag_injection", re.compile(r"(?i)<\s*/?\s*(system|instructions?)\s*>")),
-    # Zero-width and unicode tag characters: text the reviewer cannot see but
-    # the model still reads.
-    ("hidden_unicode", re.compile("[\u200b-\u200f\u2060-\u206f\ufeff]|[\U000e0000-\U000e007f]")),
+    # The unicode tag block renders as nothing and has no legitimate use in
+    # source or prose, which makes it a smuggling vector rather than an
+    # encoding artefact.
+    ("unicode_tag_chars", re.compile("[\U000e0000-\U000e007f]")),
 ]
+
+# Zero-width characters were a marker until they were measured: every hit on a
+# real prompt history came from pasted browser console output, which carries
+# U+200B, U+2060 and U+FEFF as a matter of course. They annotate a finding now
+# instead of raising one.
+_ZERO_WIDTH = re.compile("[\u200b-\u200f\u2060-\u206f\ufeff]")
 
 # Binaries whose behaviour the agent relies on. A shell function or alias by
 # one of these names changes what every later command actually does.
@@ -1022,6 +1030,50 @@ def detect_hook_execution(
                     evidence={
                         **base,
                         "undeclared": [truncate(redact_value(c, redact_output), 200) for c in undeclared],
+                    },
+                )
+            )
+    return findings
+
+
+def detect_pasted_injection(
+    records: list[PromptRecord], redact_output: bool = True
+) -> list[Finding]:
+    """Instruction-like content arriving through the prompt rather than through
+    a file the agent read.
+
+    `history.jsonl` is not swept by `cleanupPeriodDays`, so pasted text outlives
+    the transcript that would show what the agent did with it. That is also why
+    no consequence check is possible here the way it is for a file read: the
+    other half of the chain may already be gone."""
+    findings: list[Finding] = []
+    for record in records:
+        candidates = [("prompt", record.prompt)] + [
+            (f"pasted:{item.type or 'unknown'}", item.content) for item in record.pasted
+        ]
+        for origin, text in candidates:
+            markers = _injection_markers(text)
+            if not markers:
+                continue
+            findings.append(
+                Finding(
+                    detector="pasted_injection",
+                    severity="medium",
+                    title=f"Instruction-like content entered through the {origin.split(':')[0]}",
+                    detail=(
+                        f"Matched {markers} in {origin}; prompt history is not swept by "
+                        f"cleanupPeriodDays, so this survives its transcript"
+                    ),
+                    source="history.jsonl",
+                    session_id=record.session_id,
+                    timestamp=record.iso,
+                    evidence={
+                        "origin": origin,
+                        "project": record.project,
+                        "markers": markers,
+                        "zero_width_present": bool(_ZERO_WIDTH.search(text)),
+                        "excerpt": truncate(redact_value(text.strip(), redact_output), 500),
+                        "session_id": record.session_id or "<not recorded>",
                     },
                 )
             )

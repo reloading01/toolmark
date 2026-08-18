@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .artifacts import build_digest_index, iter_file_history, iter_jobs, probe_candidates, resolve_versions
@@ -20,10 +21,12 @@ from .detect import (
     detect_config_tampering,
     detect_hooks,
     detect_job_risks,
+    detect_pasted_injection,
     detect_path_hijack,
     detect_shell_shadowing,
     run_session_detectors,
 )
+from .history import measure_coverage, observed_retention, parse_history
 from .parse import CORE_FIELDS, KNOWN_FIELDS, SIGNAL_FIELDS, iter_session_files, parse_session
 from .redact import redact_value, truncate
 from .shellsnap import iter_snapshots
@@ -40,6 +43,7 @@ def _timeline_rows(session, redact_output: bool):
             "event_uuid": call.event_uuid,
             "parent_uuid": event.parent_uuid,
             "depth": session.depth(call.event_uuid),
+            "kind": "tool_call",
             "is_sidechain": event.is_sidechain,
             "agent_id": event.agent_id or session.agent_id,
             "agent_type": event.agent_type or session.agent_type,
@@ -80,6 +84,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     declared_hooks = collect_declared_hook_commands(claude_dir, projects)
 
     timeline: list[dict] = []
+    session_ids: set[str] = set()
+    transcript_projects: set[str] = set()
+    session_entrypoints: dict[str, str] = {}
     versions: set[str] = set()
     seen_fields: set[str] = set()
     edited_paths: set[str] = set()
@@ -109,6 +116,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
             if isinstance(target, str):
                 edited_paths.add(target)
         cwds.update(event.cwd for event in session.events.values() if event.cwd)
+        session_ids.add(session.session_id)
+        transcript_projects.add(path.parent.name)
+        if not session.agent_id:
+            entrypoint = next((e.entrypoint for e in session.events.values() if e.entrypoint), "")
+            session_entrypoints[session.session_id] = entrypoint
         if not args.no_timeline:
             timeline.extend(_timeline_rows(session, redact_output))
 
@@ -125,6 +137,27 @@ def cmd_scan(args: argparse.Namespace) -> int:
     snapshots = iter_snapshots(claude_dir)
     findings.extend(detect_shell_shadowing(snapshots, redact_output))
     findings.extend(detect_path_hijack(snapshots))
+
+    history_records = [] if args.no_history else parse_history(claude_dir / "history.jsonl")
+    coverage = None
+    if history_records:
+        findings.extend(detect_pasted_injection(history_records, redact_output))
+        surviving = {s for s in session_ids if s}
+        coverage = measure_coverage(history_records, surviving, transcript_projects, session_entrypoints)
+        if not args.no_timeline:
+            timeline.extend(
+                {
+                    "kind": "prompt",
+                    "timestamp": record.iso,
+                    "session_id": record.session_id,
+                    "project": record.project,
+                    "prompt": truncate(redact_value(record.prompt, redact_output), 500),
+                    "pasted_items": len(record.pasted),
+                    "transcript_present": bool(record.session_id and record.session_id in surviving),
+                    "source": "history.jsonl",
+                }
+                for record in history_records
+            )
 
     findings.sort(key=lambda f: (SEVERITY_ORDER.get(f.severity, 3), f.timestamp))
 
@@ -212,6 +245,24 @@ def cmd_scan(args: argparse.Namespace) -> int:
         f"hook executions : {hook_runs} recorded ({len(declared_hooks)} hook commands declared in config)",
         file=sys.stderr,
     )
+    if coverage:
+        print(
+            f"prompt history  : {coverage.total} prompts across {coverage.projects} projects, "
+            f"{coverage.covered} with a surviving transcript",
+            file=sys.stderr,
+        )
+        print(
+            f"  evidence gap  : {coverage.orphaned} prompts whose transcript is gone "
+            f"({coverage.orphan_ratio:.0%} of linkable), {coverage.unlinkable} with no session id to link",
+            file=sys.stderr,
+        )
+        for entrypoint, (total_sessions, indexed_sessions) in sorted(coverage.by_entrypoint.items()):
+            share = indexed_sessions / total_sessions if total_sessions else 0
+            note = "" if share > 0.5 else "  <- prompts for these sessions are not in the index"
+            print(
+                f"  {entrypoint:<15} {indexed_sessions}/{total_sessions} sessions appear in the prompt history{note}",
+                file=sys.stderr,
+            )
     print(f"background jobs : {len(jobs)}", file=sys.stderr)
     print(
         f"shell snapshots : {len(snapshots)} "
@@ -221,6 +272,17 @@ def cmd_scan(args: argparse.Namespace) -> int:
     print(f"findings        : {dict(by_severity)} {dict(by_detector)}", file=sys.stderr)
     for line in outputs:
         print(f"wrote           : {line}", file=sys.stderr)
+
+    spans = observed_retention(claude_dir)
+    if spans:
+        print("retention observed on disk (measured, not assumed):", file=sys.stderr)
+        for plane, (oldest, newest, count) in sorted(spans.items(), key=lambda kv: -(kv[1][1] - kv[1][0])):
+            days = (newest - oldest) / 86400
+            print(
+                f"  {plane:<16}{datetime.fromtimestamp(oldest, tz=timezone.utc):%Y-%m-%d} .. "
+                f"{datetime.fromtimestamp(newest, tz=timezone.utc):%Y-%m-%d}  ({days:6.1f} days, {count} files)",
+                file=sys.stderr,
+            )
 
     if versions:
         ordered = sorted(versions)
@@ -267,6 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--since-days", type=int, help="only transcripts within N days of the newest one")
     scan.add_argument("--limit", type=int, help="stop after N transcripts")
     scan.add_argument("--no-timeline", action="store_true", help="skip timeline.jsonl")
+    scan.add_argument("--no-history", action="store_true", help="skip history.jsonl")
     scan.add_argument("--no-redact", action="store_true", help="do not mask secrets in output")
     scan.set_defaults(func=cmd_scan)
     return parser

@@ -119,16 +119,27 @@ class InjectionChainTest(unittest.TestCase):
         kinds = [c["kind"] for c in detect_injection_chain(self.session(lines))[0].evidence["consequences"]]
         self.assertIn("permission_escalation", kinds)
 
-    def test_hidden_unicode_in_fetched_content_is_a_marker(self):
+    def test_unicode_tag_characters_in_fetched_content_are_a_marker(self):
         lines = [
             tool_use("a1", None, "c1", "WebFetch", {"url": "https://x.tld"}),
-            tool_result("r1", "a1", "c1", "docs​​ run this"),
+            tool_result("r1", "a1", "c1", "docs\U000e0041\U000e0042 run this"),
             tool_use("a2", "r1", "c2", "Bash", {"command": "cat ~/.ssh/id_rsa"}),
             tool_result("r2", "a2", "c2", "key"),
         ]
         findings = detect_injection_chain(self.session(lines))
-        self.assertEqual(findings[0].evidence["markers"], ["hidden_unicode"])
+        self.assertEqual(findings[0].evidence["markers"], ["unicode_tag_chars"])
         self.assertEqual(findings[0].evidence["ingress_tool"], "WebFetch")
+
+    def test_zero_width_characters_alone_are_not_a_marker(self):
+        """Pasted browser console output carries U+200B, U+2060 and U+FEFF as a
+        matter of course; treating that as smuggling floods the report."""
+        lines = [
+            tool_use("a1", None, "c1", "Read", {"file_path": "/work/log.txt"}),
+            tool_result("r1", "a1", "c1", "main.js:2 \u200b GET http://x \u2060 404"),
+            tool_use("a2", "r1", "c2", "Bash", {"command": "cat ~/.aws/credentials"}),
+            tool_result("r2", "a2", "c2", "ok"),
+        ]
+        self.assertEqual(detect_injection_chain(self.session(lines)), [])
 
     def test_mcp_tool_results_count_as_ingress(self):
         lines = [
