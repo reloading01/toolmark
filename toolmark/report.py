@@ -152,11 +152,10 @@ def build_report(findings: list[dict], context: dict) -> str:
         for finding in _sorted_findings(group)[:12]:
             stamp = (finding.get("timestamp") or "")[:19]
             evidence = _evidence_line(finding)
-            add(
-                f"- **{finding.get('severity')}** `{finding.get('detector')}` {stamp} — "
-                f"{finding.get('title')}"
-                + (f"\n  `{evidence}`" if evidence else "")
-            )
+            head = f"- **{finding.get('severity')}** `{finding.get('detector')}`"
+            if stamp:
+                head += f" {stamp}"
+            add(head + f" — {finding.get('title')}" + (f"\n  `{evidence}`" if evidence else ""))
         if len(group) > 12:
             add(f"- ... and {len(group) - 12} more in findings.jsonl")
         add("")
