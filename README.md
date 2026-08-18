@@ -55,11 +55,16 @@ Three files land in `--out-dir`:
 |---|---|
 | `findings.jsonl` | One record per detection, severity-ordered, with the evidence attached |
 | `timeline.jsonl` | One record per tool call: parent, depth, subagent, outcome, permission mode, cwd, git branch |
+| `report.md` | The triage report: where to start, what each session did, and what the run could not see |
 | `timeline.csv` | The same timeline in Timesketch's import format, with findings interleaved as events |
 | `manifest.json` | Chain of custody: a SHA-256 of every artifact read and every report written, with the acquisition context |
 | `artifacts.jsonl` | File versions, background jobs and shell snapshots recovered from the other artifact planes |
 
 Useful flags: `--since-days N` to time-box a triage, `--project PATH` to pull in a repository's `.claude/settings.json`, `--limit N`, `--no-timeline`, `--no-redact`.
+
+`report.md` is the one to open first. The JSONL files answer questions you already know how to ask; the report is for the moment before that, when the question is where to look at all. It ranks sessions rather than findings, because an incident happens inside a session and a list sorted by severity just interleaves twenty of them.
+
+It also states its own limits. A run that reports what it found and stays quiet about what was swept, withdrawn or never recorded reads as complete when it is not, so the last section says how many prompts have no surviving transcript, which retention windows are shortest, how many messages were withdrawn, and how many sessions record order without causation. If the findings do not concentrate in a few sessions the report says that too, rather than pointing at a top session the data does not support.
 
 `timeline.csv` is the same data in the shape Timesketch imports: `message`, `datetime` with an offset, `timestamp_desc`, and the agent-specific fields riding along as extra columns. Findings are written as events too, so a single sketch holds what happened and what was flagged on one axis. Rows with no usable timestamp cannot be placed and are dropped, and the count comes back with the run rather than disappearing quietly.
 

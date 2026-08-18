@@ -312,6 +312,12 @@ class EndToEndTest(unittest.TestCase):
         }
         self.assertEqual(expected - {f["detector"] for f in self.findings}, set())
 
+    def test_the_triage_report_names_the_compromised_session(self):
+        report = (self.out / "report.md").read_text(encoding="utf-8")
+        self.assertIn(SESSION_ID[:8], report)
+        self.assertIn("## What this report cannot tell you", report)
+        self.assertIn("concentrate", report)
+
     def test_secret_values_are_masked_while_the_evidence_stays_readable(self):
         blob = json.dumps(self.findings)
         self.assertNotIn("sk-ant-api03-SECRETVALUE1234567890", blob)

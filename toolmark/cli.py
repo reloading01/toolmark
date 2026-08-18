@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -36,6 +37,7 @@ from .inventory import collect_mcp_servers, collect_plugins, collect_project_tru
 from .history import measure_coverage, observed_retention, parse_history
 from .preserve import plan_paths, preserve
 from .parse import CORE_FIELDS, KNOWN_FIELDS, SIGNAL_FIELDS, iter_session_files, parse_session
+from .report import build_report
 from .redact import redact_value, truncate
 from .timesketch import write_csv
 from .shellsnap import iter_snapshots
@@ -100,6 +102,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     newest_activity = 0.0
     session_ids: set[str] = set()
     transcript_projects: set[str] = set()
+    session_projects: dict[str, str] = {}
     session_entrypoints: dict[str, str] = {}
     versions: set[str] = set()
     seen_fields: set[str] = set()
@@ -147,6 +150,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 used_components["skill"].add(event.skill)
         session_ids.add(session.session_id)
         transcript_projects.add(path.parent.name)
+        session_projects.setdefault(session.session_id, Path(session.events[session.order[0]].cwd).name
+                                    if session.order and session.events[session.order[0]].cwd else path.parent.name)
         if not session.agent_id:
             entrypoint = next((e.entrypoint for e in session.events.values() if e.entrypoint), "")
             session_entrypoints[session.session_id] = entrypoint
@@ -334,6 +339,58 @@ def cmd_scan(args: argparse.Namespace) -> int:
             + ")"
         )
 
+    spans = observed_retention(claude_dir)
+    missing_core = sorted(CORE_FIELDS - seen_fields)
+    missing_signal = sorted(SIGNAL_FIELDS - seen_fields)
+    drift = sorted(seen_fields - KNOWN_FIELDS)
+
+    gaps: list[str] = []
+    if coverage:
+        gaps.append(
+            f"{coverage.orphaned} prompts in the history have no surviving transcript, so what the agent "
+            f"was told is known for them and what it did is not"
+        )
+        for entrypoint, (total_sessions, indexed) in sorted(coverage.by_entrypoint.items()):
+            if total_sessions and indexed / total_sessions <= 0.5:
+                gaps.append(
+                    f"prompts for {entrypoint} sessions are absent from the index "
+                    f"({indexed}/{total_sessions} present), so none of them can be read back"
+                )
+    if spans:
+        shortest = sorted(spans.items(), key=lambda kv: kv[1][1] - kv[1][0])[:3]
+        gaps.append(
+            "shortest retention windows measured on disk: "
+            + ", ".join(f"{plane} {(newest - oldest) / 86400:.1f}d" for plane, (oldest, newest, _) in shortest)
+            + " - anything older than that is already gone"
+        )
+    if withdrawn:
+        gaps.append(f"{withdrawn} message(s) were withdrawn from transcripts and their content is not on disk")
+    if codex_sessions:
+        gaps.append(
+            f"{codex_sessions} Codex sessions record order but not causation, so injection chains were not "
+            f"evaluated for them"
+        )
+    if drift:
+        gaps.append(f"{len(drift)} top-level transcript field(s) are present that this build does not read")
+    if redact_output:
+        gaps.append("secret values are masked in this report; rerun with --no-redact to see them")
+
+    report_path = out_dir / "report.md"
+    report_path.write_text(
+        build_report(
+            [f.to_dict() for f in findings],
+            {
+                "source_root": str(claude_dir),
+                "host": platform.node(),
+                "tool_version": __version__,
+                "session_projects": session_projects,
+                "gaps": gaps,
+            },
+        ),
+        encoding="utf-8",
+    )
+    outputs.append(f"{report_path} (triage report)")
+
     if not args.no_manifest:
         evidence = collect_evidence(evidence_paths, claude_dir)
         produced = [Path(line.split(" (")[0]) for line in outputs]
@@ -436,7 +493,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
     for line in outputs:
         print(f"wrote           : {line}", file=sys.stderr)
 
-    spans = observed_retention(claude_dir)
     if spans:
         print("retention observed on disk (measured, not assumed):", file=sys.stderr)
         for plane, (oldest, newest, count) in sorted(spans.items(), key=lambda kv: -(kv[1][1] - kv[1][0])):
@@ -454,9 +510,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     # Schema health is measured, not assumed from a version string: a field
     # this build reads can vanish inside a single release.
-    missing_core = sorted(CORE_FIELDS - seen_fields)
-    missing_signal = sorted(SIGNAL_FIELDS - seen_fields)
-    drift = sorted(seen_fields - KNOWN_FIELDS)
     if missing_core:
         print(
             f"warning         : core fields absent from every transcript {missing_core}; "
