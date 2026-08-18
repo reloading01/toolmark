@@ -218,7 +218,9 @@ Findings are noise-tuned against real usage, which is not the same as a detectio
 python3 -m unittest discover -s tests
 ```
 
-No test dependencies. Cases are synthetic transcripts reproducing real shapes, including the CVE-2026-25725 hook and a full injection chain.
+No test dependencies. Most cases are synthetic transcripts reproducing real shapes, including the CVE-2026-25725 hook and a full injection chain.
+
+One of them is different in kind. `test_end_to_end.py` builds an agent directory carrying one instance of every shape the tool looks for, runs the real CLI over it, and checks each detector produces its finding. Everything else measures behaviour on benign data, where the correct answer is silence; a detector that cannot fire at all looks exactly the same. This is what separates the two.
 
 ## Prior work
 

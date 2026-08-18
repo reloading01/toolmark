@@ -1084,7 +1084,8 @@ def detect_pasted_injection(
                 Finding(
                     detector="pasted_injection",
                     severity="medium",
-                    title=f"Instruction-like content entered through the {origin.split(':')[0]}",
+                    title=("Instruction-like content pasted into a prompt" if origin.startswith("pasted")
+                       else "Instruction-like content typed into a prompt"),
                     detail=(
                         f"Matched {markers} in {origin}; prompt history is not swept by "
                         f"cleanupPeriodDays, so this survives its transcript"
