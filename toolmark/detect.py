@@ -29,7 +29,7 @@ from .history import PromptRecord
 from .pastecache import PasteEntry
 from .inventory import InstalledPlugin, McpServer, ProjectTrust, format_timestamp, parse_timestamp
 from .artifacts import SELF_CONFIG_FRAGMENTS, SELF_CONFIG_SUFFIXES, FileVersion, Job
-from .model import HookRun, ModelRefusal, Session, ToolDenial
+from .model import ModelRefusal, Session, ToolDenial
 from .shellsnap import Snapshot, is_tool_shadow
 from .redact import redact_value, truncate
 

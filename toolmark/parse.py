@@ -36,6 +36,17 @@ KNOWN_FIELDS = (
             "customTitle", "effort", "entrypoint", "gitBranch", "lastPrompt",
             "leafUuid", "operation", "promptId", "requestId",
             "sourceToolAssistantUUID", "userType", "version",
+            # Read by the attribution, hook-execution, blocked-action and
+            # withdrawn-content detectors.
+            "agentId", "attributionAgent", "attributionMcpServer", "attributionMcpTool",
+            "attributionPlugin", "attributionSkill", "subtype", "level",
+            "hookInfos", "hookCount", "hookErrors", "hookAdditionalContext",
+            "preventedContinuation", "stopReason", "toolUseID", "hasOutput",
+            "toolDenialKind", "apiRefusalCategory", "apiRefusalExplanation",
+            "refusedUserMessageUuid", "originalModel", "fallbackModel",
+            "retractedMessageUuids", "supersedesUuids", "neutralizedByFork",
+            "isCompactSummary", "compactMetadata", "logicalParentUuid",
+            "direction", "trigger", "scope", "isMeta",
         }
     )
 )
