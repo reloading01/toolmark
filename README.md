@@ -30,7 +30,39 @@ Blobs are content addressed under `objects/`, and `latest/` mirrors the source l
 toolmark scan --claude-dir ~/toolmark-archive/latest/claude
 ```
 
-Nothing is removed from the mirror, which makes it the union of everything seen across runs rather than a snapshot of the current state. When a file disappears from the source the run says so, and the preserved copy is then the only one left. Runs are incremental: a second pass over 2,762 files took 1.3 seconds and stored nothing new. Cheap enough for a daily cron, which is the point.
+Nothing is removed from the mirror, which makes it the union of everything seen across runs rather than a snapshot of the current state.
+
+Running it by hand only helps if you remember to, and the shortest windows measured were under a day, so a scheduled run is what makes the archive worth having. On macOS, write this to `~/Library/LaunchAgents/dev.toolmark.preserve.plist` and load it with `launchctl load -w <path>`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.toolmark.preserve</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>-m</string><string>toolmark.cli</string>
+    <string>preserve</string>
+    <string>--claude-dir</string><string>/Users/you/.claude</string>
+    <string>--codex-dir</string><string>/Users/you/.codex</string>
+    <string>--archive</string><string>/Users/you/toolmark-archive</string>
+  </array>
+  <key>WorkingDirectory</key><string>/path/to/toolmark</string>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardErrorPath</key><string>/Users/you/toolmark-archive/preserve.log</string>
+</dict>
+</plist>
+```
+
+Elsewhere, a cron line does the same job:
+
+```
+0 9 * * * cd /path/to/toolmark && /usr/bin/python3 -m toolmark.cli preserve --claude-dir ~/.claude --archive ~/toolmark-archive >> ~/toolmark-archive/preserve.log 2>&1
+```
+
+Daily is a compromise, not a guarantee: a snapshot plane that lives under a day can still be swept between runs. Preserving more often costs almost nothing, since an unchanged pass stores nothing at all. When a file disappears from the source the run says so, and the preserved copy is then the only one left. Runs are incremental: a second pass over 2,762 files took 1.3 seconds and stored nothing new. Cheap enough for a daily cron, which is the point.
 
 ## Run
 
