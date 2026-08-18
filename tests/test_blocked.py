@@ -60,7 +60,7 @@ def refusal(uuid, category="cyber", fallback="", original="claude-opus-5", retra
     return record
 
 
-class BlockedActionTest(unittest.TestCase):
+class TranscriptCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
@@ -73,6 +73,8 @@ class BlockedActionTest(unittest.TestCase):
                 fh.write(json.dumps(record) + "\n")
         return parse_session(path)
 
+
+class BlockedActionTest(TranscriptCase):
     def test_denial_is_linked_back_to_the_call_it_stopped(self):
         session = self.session([tool_use("a1", "c1", "cat ~/.ssh/id_rsa"), denial("d1", "a1")])
         findings = detect_blocked_actions(session)
@@ -120,7 +122,7 @@ class BlockedActionTest(unittest.TestCase):
         self.assertEqual(findings[0].evidence["tool"], "")
 
 
-class ModelRefusalTest(BlockedActionTest):
+class ModelRefusalTest(TranscriptCase):
     def test_refusals_are_grouped_by_category(self):
         session = self.session([refusal("r1"), refusal("r2"), refusal("r3", category="other")])
         findings = {f.evidence["category"]: f for f in detect_blocked_actions(session)}

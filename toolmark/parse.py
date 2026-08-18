@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Iterator
 
-from .model import Event, HookRun, ModelRefusal, Session, ToolCall, ToolDenial, ToolResult
+from .model import Compaction, Event, HookRun, ModelRefusal, Session, ToolCall, ToolDenial, ToolResult
 
 # Without these the transcript cannot be placed in a graph at all.
 CORE_FIELDS = frozenset({"uuid", "type", "timestamp", "message"})
@@ -132,6 +132,28 @@ def parse_session(path: str | os.PathLike[str]) -> Session:
                     )
                 )
 
+            if raw.get("subtype") == "compact_boundary":
+                meta = raw.get("compactMetadata") if isinstance(raw.get("compactMetadata"), dict) else {}
+                session.compactions.append(
+                    Compaction(
+                        event_uuid=uuid,
+                        timestamp=raw.get("timestamp", ""),
+                        logical_parent_uuid=str(raw.get("logicalParentUuid") or ""),
+                        trigger=str(meta.get("trigger") or ""),
+                        pre_tokens=int(meta.get("preTokens") or 0),
+                        duration_ms=int(meta.get("durationMs") or 0),
+                    )
+                )
+
+            session.retracted_uuids.extend(
+                str(x) for x in (raw.get("retractedMessageUuids") or []) if isinstance(x, str)
+            )
+            session.superseded_uuids.extend(
+                str(x) for x in (raw.get("supersedesUuids") or []) if isinstance(x, str)
+            )
+            if raw.get("neutralizedByFork"):
+                session.neutralized_by_fork += 1
+
             if raw.get("toolDenialKind"):
                 envelope = raw.get("toolUseResult")
                 session.denials.append(
@@ -176,6 +198,8 @@ def parse_session(path: str | os.PathLike[str]) -> Session:
                 version=raw.get("version"),
                 entrypoint=raw.get("entrypoint"),
                 is_sidechain=bool(raw.get("isSidechain")),
+                logical_parent_uuid=raw.get("logicalParentUuid"),
+                is_compact_summary=bool(raw.get("isCompactSummary")),
                 agent_id=raw.get("agentId"),
                 agent_type=raw.get("attributionAgent"),
                 mcp_server=raw.get("attributionMcpServer"),
@@ -223,7 +247,11 @@ def parse_session(path: str | os.PathLike[str]) -> Session:
             session.order.append(uuid)
 
     for uuid in session.order:
-        parent = session.events[uuid].parent_uuid
+        event = session.events[uuid]
+        # Compaction opens a new chain with a null parentUuid; logicalParentUuid
+        # is the only link back across the seam, so without this the graph
+        # fragments at every compaction.
+        parent = event.parent_uuid or event.logical_parent_uuid
         if parent and parent in session.events:
             session.children.setdefault(parent, []).append(uuid)
         else:

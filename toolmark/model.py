@@ -56,6 +56,20 @@ class HookRun:
 
 
 @dataclass
+class Compaction:
+    """A `compact_boundary` record. Compaction starts a fresh chain whose
+    `parentUuid` is null, so `logicalParentUuid` is the only thing tying the
+    transcript back together across the seam."""
+
+    event_uuid: str
+    timestamp: str
+    logical_parent_uuid: str = ""
+    trigger: str = ""
+    pre_tokens: int = 0
+    duration_ms: int = 0
+
+
+@dataclass
 class ToolDenial:
     """A tool call that was requested and stopped, by the user or by the
     auto-mode classifier. The attempt is evidence whether or not it ran."""
@@ -100,6 +114,8 @@ class Event:
     version: str | None = None
     entrypoint: str | None = None
     is_sidechain: bool = False
+    logical_parent_uuid: str | None = None
+    is_compact_summary: bool = False
     agent_id: str | None = None
     agent_type: str | None = None
     mcp_server: str | None = None
@@ -130,6 +146,10 @@ class Session:
     seen_fields: set[str] = field(default_factory=set)
     hook_runs: list[HookRun] = field(default_factory=list)
     denials: list[ToolDenial] = field(default_factory=list)
+    compactions: list[Compaction] = field(default_factory=list)
+    retracted_uuids: list[str] = field(default_factory=list)
+    superseded_uuids: list[str] = field(default_factory=list)
+    neutralized_by_fork: int = 0
     refusals: list[ModelRefusal] = field(default_factory=list)
     malformed_lines: int = 0
 
@@ -142,9 +162,12 @@ class Session:
         chain: list[Event] = []
         seen: set[str] = set()
         cur = self.events.get(uuid)
-        while cur and cur.parent_uuid and cur.parent_uuid not in seen:
-            seen.add(cur.parent_uuid)
-            parent = self.events.get(cur.parent_uuid)
+        while cur and (cur.parent_uuid or cur.logical_parent_uuid):
+            parent_uuid = cur.parent_uuid or cur.logical_parent_uuid
+            if parent_uuid in seen:
+                break
+            seen.add(parent_uuid)
+            parent = self.events.get(parent_uuid)
             if parent is None:
                 break
             chain.append(parent)

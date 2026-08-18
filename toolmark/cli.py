@@ -103,6 +103,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     malformed = 0
     injection_stats: dict[str, int] = {}
     hook_runs = 0
+    withdrawn = 0
+    compactions = 0
 
     for path in iter_session_files(claude_dir / "projects", args.since_days):
         if args.limit and sessions_read >= args.limit:
@@ -115,6 +117,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         versions |= session.versions
         seen_fields |= session.seen_fields
         hook_runs += len(session.hook_runs)
+        withdrawn += len(session.retracted_uuids) + len(session.superseded_uuids)
+        compactions += len(session.compactions)
         findings.extend(
             run_session_detectors(session, redact_output, injection_stats, declared_hooks)
         )
@@ -325,6 +329,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
         print(
             f"  reconciliation: {len(used_names & declared_names)}/{len(used_names)} servers seen in transcripts "
             f"are declared in config; the rest are injected by the host at runtime",
+            file=sys.stderr,
+        )
+    if withdrawn or compactions:
+        print(
+            f"withdrawn       : {withdrawn} message(s) removed from transcripts, "
+            f"{compactions} compaction boundary/ies",
             file=sys.stderr,
         )
     print(f"background jobs : {len(jobs)}", file=sys.stderr)

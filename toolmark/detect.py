@@ -1281,6 +1281,69 @@ def detect_blocked_actions(session: Session, redact_output: bool = True) -> list
     return findings
 
 
+def detect_withdrawn_content(session: Session, redact_output: bool = True) -> list[Finding]:
+    """Records the transcript says existed and no longer holds.
+
+    When safeguards decline a request the offending messages are retracted, and
+    an assistant message can supersede earlier ones. Neither survives:
+    measurement found none of the referenced identifiers anywhere on disk, in
+    the same transcript or another. So this is not recoverable content, it is a
+    documented hole - the transcript stating that it is incomplete here."""
+    findings: list[Finding] = []
+
+    withdrawn = len(session.retracted_uuids) + len(session.superseded_uuids)
+    if withdrawn:
+        findings.append(
+            Finding(
+                detector="withdrawn_content",
+                severity="medium",
+                title=f"{withdrawn} message(s) withdrawn from this transcript",
+                detail=(
+                    f"{len(session.retracted_uuids)} retracted and {len(session.superseded_uuids)} superseded; "
+                    f"only the identifiers remain, the content is not on disk"
+                    + (
+                        f"; {session.neutralized_by_fork} record(s) neutralised by a fork"
+                        if session.neutralized_by_fork
+                        else ""
+                    )
+                ),
+                source=session.path,
+                session_id=session.session_id,
+                timestamp=session.events[session.order[0]].timestamp if session.order else "",
+                evidence={
+                    "retracted": session.retracted_uuids[:20],
+                    "superseded": session.superseded_uuids[:20],
+                    "neutralized_by_fork": session.neutralized_by_fork,
+                    "recoverable": False,
+                },
+            )
+        )
+
+    for compaction in session.compactions:
+        findings.append(
+            Finding(
+                detector="withdrawn_content",
+                severity="low",
+                title=f"Context compacted ({compaction.trigger or 'unknown trigger'})",
+                detail=(
+                    f"{compaction.pre_tokens} tokens of context were summarised away; the transcript "
+                    f"continues across the seam through logicalParentUuid"
+                ),
+                source=session.path,
+                session_id=session.session_id,
+                timestamp=compaction.timestamp,
+                evidence={
+                    "trigger": compaction.trigger,
+                    "pre_tokens": compaction.pre_tokens,
+                    "duration_ms": compaction.duration_ms,
+                    "logical_parent_uuid": compaction.logical_parent_uuid,
+                    "event_uuid": compaction.event_uuid,
+                },
+            )
+        )
+    return findings
+
+
 def run_session_detectors(
     session: Session,
     redact_output: bool = True,
@@ -1293,4 +1356,5 @@ def run_session_detectors(
         + detect_injection_chain(session, redact_output, stats=stats)
         + detect_hook_execution(session, declared_hook_commands, redact_output)
         + detect_blocked_actions(session, redact_output)
+        + detect_withdrawn_content(session, redact_output)
     )
