@@ -147,6 +147,10 @@ def parse_session(path: str | os.PathLike[str]) -> Session:
                 is_sidechain=bool(raw.get("isSidechain")),
                 agent_id=raw.get("agentId"),
                 agent_type=raw.get("attributionAgent"),
+                mcp_server=raw.get("attributionMcpServer"),
+                mcp_tool=raw.get("attributionMcpTool"),
+                plugin=raw.get("attributionPlugin"),
+                skill=raw.get("attributionSkill"),
                 permission_mode=raw.get("permissionMode"),
             )
 

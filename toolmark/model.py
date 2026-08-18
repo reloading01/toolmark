@@ -72,6 +72,10 @@ class Event:
     is_sidechain: bool = False
     agent_id: str | None = None
     agent_type: str | None = None
+    mcp_server: str | None = None
+    mcp_tool: str | None = None
+    plugin: str | None = None
+    skill: str | None = None
     permission_mode: str | None = None
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)

@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .history import PromptRecord
+from .inventory import InstalledPlugin, McpServer, ProjectTrust, format_timestamp, parse_timestamp
 from .artifacts import SELF_CONFIG_FRAGMENTS, SELF_CONFIG_SUFFIXES, FileVersion, Job
 from .model import HookRun, Session
 from .shellsnap import Snapshot, is_tool_shadow
@@ -1077,6 +1078,96 @@ def detect_pasted_injection(
                     },
                 )
             )
+    return findings
+
+
+def detect_supply_chain(
+    servers: list[McpServer],
+    plugins: list[InstalledPlugin],
+    trust: list[ProjectTrust],
+    reference_time: float = 0.0,
+    recent_days: int = 7,
+    redact_output: bool = True,
+) -> list[Finding]:
+    """Third-party components the agent runs with.
+
+    Deliberately not reported: a server used in a transcript with no matching
+    declaration. Measurement shows the host injects servers at runtime that
+    appear in no configuration file, so that comparison flags ordinary desktop
+    usage. It is reconciliation output rather than a finding."""
+    findings: list[Finding] = []
+
+    for plugin in plugins:
+        if not plugin.marketplace_known:
+            findings.append(
+                Finding(
+                    detector="supply_chain",
+                    severity="high",
+                    title="Plugin from an unregistered marketplace",
+                    detail=(
+                        f"{plugin.name} was installed from {plugin.marketplace!r}, which is absent "
+                        f"from known_marketplaces.json"
+                    ),
+                    source=plugin.install_path or "plugins/installed_plugins.json",
+                    timestamp=plugin.installed_at,
+                    evidence={
+                        "plugin": plugin.name,
+                        "marketplace": plugin.marketplace,
+                        "installed_at": plugin.installed_at,
+                        "scope": plugin.scope,
+                    },
+                )
+            )
+
+        if not reference_time:
+            continue
+        arrival = max(parse_timestamp(plugin.installed_at), parse_timestamp(plugin.last_updated))
+        if arrival and 0 <= (reference_time - arrival) <= recent_days * 86400:
+            findings.append(
+                Finding(
+                    detector="supply_chain",
+                    severity="medium",
+                    title="Plugin introduced shortly before the activity collected here",
+                    detail=(
+                        f"{plugin.name} was installed or updated {(reference_time - arrival) / 86400:.1f} "
+                        f"days before the newest activity in this collection"
+                    ),
+                    source=plugin.install_path or "plugins/installed_plugins.json",
+                    timestamp=plugin.installed_at,
+                    evidence={
+                        "plugin": plugin.name,
+                        "installed_at": plugin.installed_at,
+                        "last_updated": plugin.last_updated,
+                        "reference_time": format_timestamp(reference_time),
+                    },
+                )
+            )
+
+    trusted = {record.project for record in trust if record.trusted}
+    for server in servers:
+        if server.scope != "project":
+            continue
+        was_trusted = server.project in trusted
+        findings.append(
+            Finding(
+                detector="supply_chain",
+                severity="medium" if was_trusted else "low",
+                title="MCP server defined by the repository",
+                detail=(
+                    f"{server.name} is declared in {server.source}, so the repository decides what "
+                    f"tools the agent has"
+                    + ("; the workspace is trusted, so it loads" if was_trusted else "; workspace not trusted")
+                ),
+                source=server.source,
+                evidence={
+                    "server": server.name,
+                    "scope": server.scope,
+                    "project": server.project,
+                    "workspace_trusted": was_trusted,
+                    "config": redact_value(server.config, redact_output),
+                },
+            )
+        )
     return findings
 
 

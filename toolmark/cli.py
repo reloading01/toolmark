@@ -24,8 +24,10 @@ from .detect import (
     detect_pasted_injection,
     detect_path_hijack,
     detect_shell_shadowing,
+    detect_supply_chain,
     run_session_detectors,
 )
+from .inventory import collect_mcp_servers, collect_plugins, collect_project_trust
 from .history import measure_coverage, observed_retention, parse_history
 from .parse import CORE_FIELDS, KNOWN_FIELDS, SIGNAL_FIELDS, iter_session_files, parse_session
 from .redact import redact_value, truncate
@@ -47,6 +49,9 @@ def _timeline_rows(session, redact_output: bool):
             "is_sidechain": event.is_sidechain,
             "agent_id": event.agent_id or session.agent_id,
             "agent_type": event.agent_type or session.agent_type,
+            "mcp_server": event.mcp_server,
+            "plugin": event.plugin,
+            "skill": event.skill,
             "tool": call.name,
             "subagent_type": call.input.get("subagent_type") if isinstance(call.input, dict) else None,
             "input": redact_value(call.input, redact_output),
@@ -84,6 +89,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     declared_hooks = collect_declared_hook_commands(claude_dir, projects)
 
     timeline: list[dict] = []
+    used_components: dict[str, set[str]] = {"mcp_server": set(), "plugin": set(), "skill": set()}
+    newest_activity = 0.0
     session_ids: set[str] = set()
     transcript_projects: set[str] = set()
     session_entrypoints: dict[str, str] = {}
@@ -116,6 +123,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
             if isinstance(target, str):
                 edited_paths.add(target)
         cwds.update(event.cwd for event in session.events.values() if event.cwd)
+        newest_activity = max(newest_activity, path.stat().st_mtime)
+        for event in session.events.values():
+            if event.mcp_server:
+                used_components["mcp_server"].add(event.mcp_server)
+            if event.plugin:
+                used_components["plugin"].add(event.plugin)
+            if event.skill:
+                used_components["skill"].add(event.skill)
         session_ids.add(session.session_id)
         transcript_projects.add(path.parent.name)
         if not session.agent_id:
@@ -133,6 +148,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     jobs = iter_jobs(claude_dir)
     findings.extend(detect_job_risks(jobs, redact_output))
+
+    mcp_servers = collect_mcp_servers(claude_dir, projects)
+    installed_plugins = collect_plugins(claude_dir)
+    project_trust = collect_project_trust(claude_dir)
+    findings.extend(
+        detect_supply_chain(
+            mcp_servers, installed_plugins, project_trust, newest_activity, redact_output=redact_output
+        )
+    )
 
     snapshots = iter_snapshots(claude_dir)
     findings.extend(detect_shell_shadowing(snapshots, redact_output))
@@ -187,6 +211,33 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 "mtime": v.mtime,
             }
             for v in file_versions
+        ]
+        + [
+            {
+                "kind": "mcp_server",
+                "name": s.name,
+                "scope": s.scope,
+                "source": s.source,
+                "transport": s.transport,
+                "command": truncate(redact_value(s.command, redact_output), 300),
+                "url": s.url,
+                "project": s.project,
+                "used_in_transcripts": s.name in used_components["mcp_server"],
+            }
+            for s in mcp_servers
+        ]
+        + [
+            {
+                "kind": "plugin",
+                "name": p.name,
+                "marketplace": p.marketplace,
+                "marketplace_known": p.marketplace_known,
+                "installed_at": p.installed_at,
+                "last_updated": p.last_updated,
+                "scope": p.scope,
+                "used_in_transcripts": p.name.split("@")[0] in used_components["plugin"],
+            }
+            for p in installed_plugins
         ]
         + [
             {
@@ -263,6 +314,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"  {entrypoint:<15} {indexed_sessions}/{total_sessions} sessions appear in the prompt history{note}",
                 file=sys.stderr,
             )
+    declared_names = {s.name for s in mcp_servers}
+    used_names = used_components["mcp_server"]
+    print(
+        f"components      : {len(mcp_servers)} MCP servers declared, {len(installed_plugins)} plugins installed, "
+        f"{sum(1 for t in project_trust if t.trusted)}/{len(project_trust)} projects trusted",
+        file=sys.stderr,
+    )
+    if used_names:
+        print(
+            f"  reconciliation: {len(used_names & declared_names)}/{len(used_names)} servers seen in transcripts "
+            f"are declared in config; the rest are injected by the host at runtime",
+            file=sys.stderr,
+        )
     print(f"background jobs : {len(jobs)}", file=sys.stderr)
     print(
         f"shell snapshots : {len(snapshots)} "

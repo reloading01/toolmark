@@ -50,6 +50,7 @@ Secrets are masked by default. The report is itself a leak surface, because tran
 | Detector | Fires on |
 |---|---|
 | `hook_persistence` | Hooks that run code on their own schedule, across all five handler types and every file a hook can be declared in |
+| `supply_chain` | Plugins from unregistered marketplaces, components introduced just before the activity collected, and MCP servers the repository defines for itself |
 | `pasted_injection` | Instruction-like content entering through a prompt or a paste, which outlives the transcript that would show what came of it |
 | `hook_execution` | Hooks that actually ran: ones that errored, blocked the agent, injected context, or fired from a declaration that no longer exists |
 | `injection_chain` | Instruction-like content the agent read, followed by a sensitive action descending from it |
@@ -77,12 +78,22 @@ Declared and executed are different questions, and the transcript answers the se
 | `file-history/<session>/<digest>@v<N>` | The agent's own copy of every file it edited, versioned |
 | `jobs/<id>/state.json`, `timeline.jsonl` | Background job launch flags, fanned-out shell tasks, and the job's state transitions |
 | `shell-snapshots/snapshot-<shell>-<epoch_ms>-<id>.sh` | The shell as the agent saw it: functions, aliases, options, exported PATH |
+| `~/.claude.json` | User and local scoped MCP servers, per-project trust decisions, server enable/disable state, and a tool usage ledger |
+| `<project>/.mcp.json` | Project-scoped MCP servers, committed to the repository |
 | `history.jsonl` | Every prompt typed at the terminal, with timestamp, project and pasted content inline |
 | `settings.json`, `plugins/`, `known_marketplaces.json` | Configuration, installed plugins, registered marketplaces |
 
 `parentUuid` is the point of the whole thing. A transcript is not a flat log. Every record names its parent, which is what makes "which file read led to which command" an answerable question instead of a guess. `isSidechain` and `subagent_type` separate subagent branches from the main thread.
 
 `file-history` entries are named `<sha256(absolute path)[:16]>@v<N>` with no manifest, so the directory is anonymous by itself. The path comes either from edit targets in the transcripts, or from hashing a path you already suspect and looking for it. The second route still works after the 30-day transcript cleanup, which is exactly when it matters. Content is hard-linked across session directories, so an entry filed under a session whose transcript is gone still resolves if the same file was edited in a surviving session.
+
+## Supply chain
+
+An agent's reach is whatever its components can do, and those components are third-party code. The first confirmed malicious MCP server in the wild shipped fifteen clean releases before adding a line that copied every email to its author, so what is installed and what ran are separate questions.
+
+Servers are declared in four places and a single config read is not an inventory: user scope and local scope both live in `~/.claude.json`, project scope lives in a `.mcp.json` committed to the repository, and plugins declare their own. Project-scoped servers only load once the workspace is trusted, so the trust decision recorded per project is part of the picture rather than a footnote. Attribution runs the other direction: transcripts record which MCP server, tool, plugin and skill produced each action, so a finding can name the component rather than only the session.
+
+One comparison is deliberately not a finding. A server used in a transcript with no matching declaration looks like the obvious detection, but measurement shows the host injects servers at runtime that appear in no configuration file at all, so the check flags ordinary desktop use. It is reported as reconciliation instead, with the count stated plainly.
 
 ## Evidence coverage
 
